@@ -12,7 +12,7 @@ Un mod universel léger pour les jeux sous **Ren'Py** (versions 7.x et 8.x). Il 
 
 ## 📥 Installation
 
-1. Télécharge le fichier du mod (ex: `00_dev_mod.rpy`).
+1. Télécharge le fichier du mod (ex: `00_universal_dev_mod.rpy`).
 2. Copie-le dans le dossier `game/` du jeu Ren'Py ciblé :
    ```text
    DossierDuJeu/
