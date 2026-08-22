@@ -17,7 +17,7 @@ Un mod universel léger pour les jeux sous **Ren'Py** (versions 7.x et 8.x). Il 
    ```text
    DossierDuJeu/
    └── game/
-       └── 00_dev_mod.rpy
+       └── 00_universal_dev_mod.rpy
 ---
 
 ## 🎮 Utilisation
