@@ -1,224 +1,225 @@
 # =========================================================
-# MOD UNIVERSEL DEV, CONSOLE & CHOICE DESCRIPTOR
+# MOD UNIVERSEL DEV - CHOICE DESCRIPTOR (v2)
+# A placer dans game/ : affiche l'effet de chaque choix
+# (vert = hausse, rouge = baisse) devant les options de menu.
 # =========================================================
+
+default persistent.dev_mod_enabled = True
 
 init -1000 python:
 
-    # Variable globale de sauvegarde du mod
-    if not hasattr(persistent, "dev_mod_enabled"):
-        persistent.dev_mod_enabled = True
+    # ---------------- REGLAGES ----------------
+    # Mettre False pour une version publique du jeu
+    _UCD_FORCE_DEVELOPER = True
+    # Variables pour lesquelles une hausse est MAUVAISE (affichee en rouge)
+    _UCD_INVERTED = ("stress", "corruption", "suspicion")
+    _UCD_UP = "#4c4"
+    _UCD_DOWN = "#e44"
+    _UCD_NEUTRAL = "#ee3"
+    _UCD_MAX_DEPTH = 8
+    _UCD_TAG = "{#UCD}"
+    # -------------------------------------------
 
-    config.developer = True
-    config.console = True
+    import re as _ucd_re
 
-    class _ZLZK_UCD(_object):
+    try:
+        _ucd_str = basestring
+    except NameError:
+        _ucd_str = str
 
-        class _mod(_object):
-            def __init__(self):
-                from collections import OrderedDict
-                import sys
-                import re
-                self.OrderedDict = OrderedDict
-                self.sys = sys
-                self.re = re
+    _UCD_TRACKED = (bool, int, float, _ucd_str)
+    _UCD_PATTERN = _ucd_re.compile(
+        r"^\s*(\w+(?:\s*\.\s*\w+)*)\s*(\*\*|//|[+\-*/%])?=(?!=)\s*(.+)$")
+    # Evite d'evaluer des expressions a effets de bord (aleatoire, saisie...)
+    _UCD_DENY = _ucd_re.compile(r"\b(renpy|random|input)\b")
 
-        class _ref(_object):
-            def __init__(self):
-                self.py_eval = renpy.python.py_eval
-                self.If = renpy.ast.If
-                self.Call = renpy.ast.Call
-                self.Jump = renpy.ast.Jump
-                self.Label = renpy.ast.Label
-                self.Python = renpy.ast.Python
-                self.Return = renpy.ast.Return
-                self.script = renpy.game.script
-                self.context = renpy.game.context
+    def _ucd_eval(expr):
+        try:
+            return renpy.python.py_eval(expr)
+        except Exception:
+            return None
 
-        class _FlagExtractor(_object):
-            def __init__(self, mod):
-                self.OrderedDict = mod._mod.OrderedDict
-                self.store_eval = mod._safe_store_eval
-                self.pattern = mod._pattern
-                self.re = mod._mod.re
-                self.If = mod._ref.If
-                self.Call = mod._ref.Call
-                self.Jump = mod._ref.Jump
-                self.Label = mod._ref.Label
-                self.Python = mod._ref.Python
-                self.Return = mod._ref.Return
-                self.script = mod._ref.script
+    def _ucd_esc(text):
+        return text.replace("{", "{{").replace("[", "[[")
 
-            def __call__(self, block):
-                s_type = (bool,)
-                try:
-                    s_type += (basestring,)
-                except NameError:
-                    s_type += (str,)
-                n_type = (int, float)
+    def _ucd_fmt(name, old, new):
+        """Retourne le texte colore d'une variable modifiee, ou None."""
+        if new == old:
+            return None
 
-                self.s_type = s_type
-                self.n_type = n_type
-                self.flags = self.OrderedDict()
-                self.fvals = _dict()
-                self.ajump = False
+        new_bool = isinstance(new, bool)
+        old_bool = isinstance(old, bool)
+        both_num = (not new_bool and not old_bool
+                    and isinstance(new, (int, float))
+                    and isinstance(old, (int, float)))
 
-                self.process_block(block)
-                return self.process_flags()
+        if both_num:
+            diff = new - old
+            if isinstance(diff, float):
+                if abs(diff) < 0.005:
+                    return None
+                txt = ("%+.2f" % diff).rstrip("0").rstrip(".")
+            else:
+                txt = "%+d" % diff
+            up = diff > 0
+        elif new_bool and old_bool:
+            txt = "%s" % new
+            up = bool(new)
+        else:
+            value = _ucd_esc(u"%s" % (new,))[:40]
+            return u"{color=%s}%s: %s{/color}" % (_UCD_NEUTRAL, name, value)
 
-            def process_flags(self):
-                rv = _list()
-                for k, v in self.flags.items():
-                    if isinstance(v, self.s_type):
-                        if v != self.fvals[k]:
-                            rv.append((k, v))
-                    elif isinstance(v, self.n_type):
-                        if v:
-                            rv.append((k, v))
-                return rv
+        if name in _UCD_INVERTED:
+            up = not up
+        color = _UCD_UP if up else _UCD_DOWN
+        return u"{color=%s}%s: %s{/color}" % (color, name, txt)
 
-            def process_flag(self, varname, expre_value, store_value):
-                if isinstance(expre_value, (self.s_type, type(None))):
-                    self.flags[varname] = expre_value
-                elif isinstance(expre_value, self.n_type):
-                    if isinstance(store_value, self.n_type):
-                        expre_value -= store_value
-                    self.flags[varname] = expre_value
-
-            def process_match(self, varnames, operator, valexpre):
-                if "renpy.input" in valexpre:
-                    return
-                varnames = varnames.split(",")
-                if len(varnames) == 1:
-                    varname = varnames[0]
-                    if varname in self.flags:
-                        store_value = self.flags[varname]
-                    else:
-                        store_value = self.store_eval(varname)
-                        self.flags[varname] = store_value
-                        self.fvals[varname] = store_value
-
-                    if operator == "=":
-                        expre_value = self.store_eval(valexpre)
-                    else:
-                        eval_str = str(store_value) + " " + str(operator[0]) + " " + str(valexpre)
-                        expre_value = self.store_eval(eval_str)
-                    self.process_flag(varname, expre_value, store_value)
-
-            def process_python(self, node):
-                for line in node.code.source.splitlines():
-                    match = self.re.match(self.pattern, line)
-                    if match:
-                        self.process_match(*match.group(1, 2, 3))
-
-            def process_if(self, node):
-                for condition, block in node.entries:
-                    if self.store_eval(condition):
-                        return self.process_block(block)
-
-            def process_label(self, node):
-                self.process_block(node.block)
-
-            def process_label_name(self, label):
-                if label and self.script.has_label(label):
-                    self.process_label(self.script.lookup(label))
-
-            def process_call(self, node):
-                lbl = self.store_eval(node.label) if node.expression else node.label
-                self.process_label_name(lbl)
-
-            def process_jump(self, node):
-                tgt = self.store_eval(node.target) if node.expression else node.target
-                if not self.ajump:
-                    self.ajump = True
-                    self.process_label_name(tgt)
-
-            def process_block(self, nodes):
-                for node in nodes:
-                    node_type = node.__class__
-                    if node_type is self.Python:
-                        self.process_python(node)
-                    elif node_type is self.If:
-                        self.process_if(node)
-                    elif node_type is self.Label:
-                        self.process_label(node)
-                    elif node_type is self.Call:
-                        self.process_call(node)
-                    elif node_type is self.Jump:
-                        self.process_jump(node)
-                    elif node_type is self.Return:
-                        return
-
-        _mod = _mod()
-        _ref = _ref()
-        tag = "{#UCD}"
-        _pattern = _mod.re.compile(r"^\s*(\w+(?:\s*\.\s*\w*)*(?:\s*,\s*\w+(?:\s*\.\s*\w*)*)*)\s*([+\-*/]?=)(?!=)\s*(.+)$")
+    class _UcdSim(_object):
+        """Simule un bloc de choix et memorise les variables touchees."""
 
         def __init__(self):
-            self._FlagExtractor = self._FlagExtractor(self)
+            self.start = _dict()   # valeurs initiales
+            self.cur = _dict()     # valeurs simulees
+            self.end = None        # None / "return" / "jump"
 
-        def __call__(self, name):
-            if name.startswith("menu"):
-                self.process_menu()
+        def run(self, nodes, depth):
+            for node in nodes:
+                if self.end:
+                    return
+                kind = node.__class__
+                if kind is renpy.ast.Python:
+                    self.python(node)
+                elif kind is renpy.ast.If:
+                    self.cond(node, depth)
+                elif kind is renpy.ast.Label:
+                    self.run(node.block, depth)
+                elif kind is renpy.ast.Call:
+                    self.call(node, depth)
+                elif kind is renpy.ast.Jump:
+                    self.jump(node, depth)
+                elif kind is renpy.ast.Return:
+                    self.end = "return"
 
-        @classmethod
-        def _safe_store_eval(cls, code, globals=None, locals=None):
-            if globals is None:
-                globals = cls._mod.sys._getframe(2).f_globals
-            try:
-                return cls._ref.py_eval(code, globals, locals)
-            except:
-                return None
-
-        def process_menu(self):
-            script, context = self._ref.script, self._ref.context
-            menu = script.namemap.get(context().current)
-            if not menu:
+        def enter(self, name, depth):
+            if not name or depth >= _UCD_MAX_DEPTH:
                 return
-            
-            # Si le mod est DESACTIVE, on retire proprement les annotations
-            if not persistent.dev_mod_enabled:
-                for i, (label, condition, block) in enumerate(menu.items):
-                    if block is None:
-                        continue
-                    clean_label = label.split(self.tag)[0]
-                    menu.items[i] = (clean_label, condition, block)
+            script = renpy.game.script
+            if script.has_label(name):
+                self.run(script.lookup(name).block, depth + 1)
+
+        def call(self, node, depth):
+            name = _ucd_eval(node.label) if node.expression else node.label
+            self.enter(name, depth)
+            if self.end == "return":   # fin du call : on reprend apres
+                self.end = None
+
+        def jump(self, node, depth):
+            name = _ucd_eval(node.target) if node.expression else node.target
+            self.enter(name, depth)
+            self.end = "jump"
+
+        def cond(self, node, depth):
+            for condition, block in node.entries:
+                if _ucd_eval(condition):
+                    self.run(block, depth)
+                    return
+
+        def python(self, node):
+            for line in node.code.source.splitlines():
+                m = _UCD_PATTERN.match(line)
+                if m:
+                    self.assign(*m.group(1, 2, 3))
+
+        def assign(self, name, op, expr):
+            if _UCD_DENY.search(expr):
                 return
+            name = _ucd_re.sub(r"\s+", "", name)
 
-            # Si le mod est ACTIVE, on extrait et injecte les annotations
-            data = _dict()
-            for i, (label, condition, block) in enumerate(menu.items):
-                if block and self._safe_store_eval(condition):
-                    data[i] = self._FlagExtractor(block)
+            if name not in self.cur:
+                value = _ucd_eval(name)
+                if value is None or not isinstance(value, _UCD_TRACKED):
+                    return
+                self.start[name] = value
+                self.cur[name] = value
 
-            for i, (label, condition, block) in enumerate(menu.items):
-                if block is None:
-                    continue
-                flags = data.get(i, None)
-                if flags:
-                    str_flags = []
-                    for var, val in flags:
-                        sign = "+" if isinstance(val, (int, float)) and val > 0 else ""
-                        str_flags.append(str(var) + ": " + sign + str(val))
-                    
-                    desc = self.tag + " {color=#ee3}{size=-2}( " + " | ".join(str_flags) + " ){/size}{/color}"
-                else:
-                    desc = ""
-                
-                clean_label = label.split(self.tag)[0]
-                menu.items[i] = (clean_label + desc, condition, block)
+            old = self.cur[name]
+            if op:
+                new = _ucd_eval("(%r) %s (%s\n)" % (old, op, expr))
+            else:
+                new = _ucd_eval("(%s\n)" % expr)
 
-    _ZLZK_UCD = _ZLZK_UCD()
+            if new is not None and isinstance(new, _UCD_TRACKED):
+                self.cur[name] = new
+
+    def _ucd_describe(block):
+        sim = _UcdSim()
+        sim.run(block, 0)
+        parts = _list()
+        for name, new in sim.cur.items():
+            part = _ucd_fmt(name, sim.start[name], new)
+            if part:
+                parts.append(part)
+        if not parts:
+            return ""
+        return _UCD_TAG + u" {size=-2}( " + u" | ".join(parts) + u" ){/size}"
+
+    def _ucd_current_menu():
+        node = renpy.game.script.namemap.get(renpy.game.context().current)
+        if isinstance(node, renpy.ast.Menu):
+            return node
+        return None
+
+    def _ucd_process_menu():
+        menu = _ucd_current_menu()
+        if menu is None:
+            return
+
+        enabled = bool(persistent.dev_mod_enabled)
+
+        for i, item in enumerate(menu.items):
+            label, condition, block = item[0], item[1], item[2]
+            if block is None:          # simple legende, pas un choix
+                continue
+
+            clean = label.split(_UCD_TAG)[0]
+            desc = ""
+            if enabled and (condition is None or _ucd_eval(condition)):
+                desc = _ucd_describe(block)
+
+            menu.items[i] = (clean + desc,) + tuple(item[1:])
+
+    def _ucd_statement_callback(name):
+        try:
+            if name and str(name).startswith("menu"):
+                _ucd_process_menu()
+        except Exception as e:
+            renpy.write_log("UCD error: %r" % (e,))
+
+init 999 python:
+    # Apres options.rpy, pour ne pas etre ecrase par le jeu
+    if _UCD_FORCE_DEVELOPER:
+        config.developer = True
+        config.console = True
 
 init 1000 python:
-    _config.statement_callbacks.append(_ZLZK_UCD)
+
+    # Evite les doublons apres un rechargement (Shift+R)
+    config.statement_callbacks[:] = [
+        c for c in config.statement_callbacks
+        if getattr(c, "__name__", "") != "_ucd_statement_callback"
+    ]
+    config.statement_callbacks.append(_ucd_statement_callback)
+
+    if "dev_mod_toggle_button" not in config.overlay_screens:
+        config.overlay_screens.append("dev_mod_toggle_button")
 
     def toggle_dev_mod():
         persistent.dev_mod_enabled = not persistent.dev_mod_enabled
-        config.developer = persistent.dev_mod_enabled
-        config.console = persistent.dev_mod_enabled
-        
-        # Force le ré-affichage instantané du menu actuel
-        _ZLZK_UCD.process_menu()
+        try:
+            # Nettoie / met a jour le menu courant (visible au prochain affichage)
+            _ucd_process_menu()
+        except Exception as e:
+            renpy.write_log("UCD toggle error: %r" % (e,))
         renpy.restart_interaction()
 
 screen dev_mod_toggle_button():
@@ -231,6 +232,3 @@ screen dev_mod_toggle_button():
             action Function(toggle_dev_mod)
             text_size 14
             text_color ("#00FF00" if persistent.dev_mod_enabled else "#FF0000")
-
-init python:
-    config.overlay_screens.append("dev_mod_toggle_button")
